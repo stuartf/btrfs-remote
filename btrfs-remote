@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# This script assumes snapshots show up in alphabetic order
+# using btrfs-snap this shouldn't be a problem
+
+SRC=$1
+PREFIX=$2
+DEST=$3
+DESTDIR=$4
+KEEP=$5
+
+# BTRFS send bug means btrfs root volume needs to be mounted somewhere
+HACK="/opt/btrfs/@home/" 
+
+# Get the current and previous snapshots with the specified prefix
+PREV=${HACK}$(/sbin/btrfs subvolume list ${SRC} | /bin/grep "${PREFIX}" | /usr/bin/tail -n2 | /usr/bin/head -n1 | /usr/bin/cut -d ' ' -f 9)
+CURR=${HACK}$(/sbin/btrfs subvolume list ${SRC} | /bin/grep "${PREFIX}" | /usr/bin/tail -n1 | /usr/bin/cut -d ' ' -f 9)
+
+# Send the current snapshot as incremental from the previous
+/sbin/btrfs send -p ${PREV} ${CURR} | /usr/bin/ssh ${DEST} /usr/bin/sudo /sbin/btrfs receive ${DESTDIR}
+
+# Find out how many remote snapshots we have with this prefix
+COUNT=$(/usr/bin/ssh ${DEST} /usr/bin/sudo /sbin/btrfs subvolume list ${DESTDIR} | /bin/grep $(/usr/bin/basename ${PREFIX})| /usr/bin/wc -l)
+
+# Delete snapshots to get down to the keep number this could probably be
+# done in a single ssh...
+if [ "$COUNT" -gt "$KEEP" ]
+then
+	let "DELETE = $COUNT - $KEEP"
+	/usr/bin/ssh ${DEST} /usr/bin/sudo /sbin/btrfs subvolume list ${DESTDIR} | /bin/grep $(/usr/bin/basename ${PREFIX})| /usr/bin/head -n${DELETE} | /usr/bin/cut -d ' ' -f 9 | xargs -n1 -I {} /usr/bin/ssh ${DEST} /usr/bin/sudo /sbin/btrfs subvolume delete ${DESTDIR}/{}
+fi
